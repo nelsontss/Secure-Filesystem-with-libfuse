@@ -16,7 +16,7 @@
  *
  * Compile with
  *
- *     gcc -Wall passthrough.c `pkg-config fuse3 --cflags --libs` -o passthrough
+ *     gcc -Wall main.c `pkg-config fuse3 --cflags --libs` -o secureFS
  *
  * ## Source code ##
  * \include passthrough.c
@@ -36,6 +36,7 @@
 #define _XOPEN_SOURCE 700
 #endif
 
+#include "entropy.h"
 #include <fuse.h>
 #include <stdio.h>
 #include <string.h>
@@ -343,13 +344,36 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 	
 	if (fd == -1)
 		return -errno;
+	
+	FILE* fp;
+	bool newFile;
+	fp = fopen(path, "r");
+	fp!=NULL ? newFile = false: newFile: true;
+	
+	if(!newFile){
+		char *inital_text = malloc((size + 1) * size);
+		fseek(fp, offset, SEEK_SET);
+		fread(inital_text, size, 1, fp);
+		fseek(fp, 0, SEEK_SET);
+		double initial_entropy = calculate_entropy(inital_text, strlen(inital_text));	
+		double final_entropy = calculate_entropy(buf, size);
+	
+		if (final_entropy > 6.0 && final_entropy - initial_entropy < 2) {
+			res = pwrite(fd, buf, size, offset);
+		}else{
+			res = -1;
+		}
+	}else{
 
-	res = pwrite(fd, buf, size, offset);
-	if (res == -1)
+		res = pwrite(fd, buf, size, offset);
+
+		if (res == -1)
 		res = -errno;
 
-	if(fi == NULL)
-		close(fd);
+		if(fi == NULL)
+			close(fd);	
+	}
+	
 	return res;
 }
 
@@ -382,6 +406,11 @@ static int xmp_fsync(const char *path, int isdatasync,
 	(void) fi;
 	return 0;
 }
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
+#include <math.h>
 
 #ifdef HAVE_POSIX_FALLOCATE
 static int xmp_fallocate(const char *path, int mode,
