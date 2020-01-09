@@ -348,8 +348,12 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 	FILE* fp;
 	bool newFile;
 	fp = fopen(path, "r");
-	fp!=NULL ? newFile = false: newFile: true;
-	
+	if (fp!=NULL ) {
+		newFile = false;	
+	} else {
+		newFile = true;	
+	} 
+
 	if(!newFile){
 		char *inital_text = malloc((size + 1) * size);
 		fseek(fp, offset, SEEK_SET);
