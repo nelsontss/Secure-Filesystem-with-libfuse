@@ -37,6 +37,8 @@
 #endif
 
 #include "entropy.h"
+//#include "main.h"
+#include <glib.h>
 #include <fuse.h>
 #include <stdio.h>
 #include <string.h>
@@ -55,6 +57,17 @@
 #endif
 
 #include "passthrough_helpers.h"
+
+#define BACKUP_DIR "/root/fBackup/"
+
+
+GHashTable* ocurrencies ;
+GHashTable* paths ;
+
+typedef struct {
+    char* iPath;
+    char* fPath;
+} stringTuple;
 
 static void *xmp_init(struct fuse_conn_info *conn,
 		      struct fuse_config *cfg)
@@ -330,11 +343,34 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 	return res;
 }
 
+const char* save_path_in_hash(pid_t pid, const char* path){
+	GArray* res;
+	char* dir = BACKUP_DIR;
+	printf("Caminho: %s\n", path);
+	const char* backupPath = strcat(dir, path); // definir
+	if((res = g_hash_table_lookup(paths, &pid))){
+		GArray* tuple = g_array_new(false, false, 2);
+		g_array_insert_val(tuple, 0, path);
+		g_array_insert_val(tuple, 1, backupPath);
+		g_array_append_val(res, tuple);
+	}else{
+		res = g_array_new (false, false, 10);
+		GArray* tuple = g_array_new(false, false, 2);
+		g_array_insert_val(tuple, 0, path);
+		g_array_insert_val(tuple, 1, backupPath);
+		g_array_append_val(res, tuple);
+		g_hash_table_insert(paths, &pid, res);
+	}
+
+	return backupPath;
+}
+
 static int xmp_write(const char *path, const char *buf, size_t size,
 		     off_t offset, struct fuse_file_info *fi)
 {
 	int fd;
 	int res;
+	int filesize;
 
 	(void) fi;
 	if(fi == NULL)
@@ -345,10 +381,41 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 	if (fd == -1)
 		return -errno;
 	
+	printf("Caminho: %s\n", path);
+	
+	filesize = lseek(fd, 0, SEEK_END)+1;
+	lseek(fd, 0, SEEK_SET);
 	
 	double final_entropy = calculate_entropy(buf, size);
 	printf("Final entropy: %f\n", final_entropy);
 	if (final_entropy < 6.0) {
+		struct fuse_context* context = fuse_get_context();
+		pid_t processId = context->pid;
+
+		//processo já existe na hash
+		int* ocurrencie;
+		if((ocurrencie = g_hash_table_lookup(ocurrencies, &processId))){
+			if(*ocurrencie<10){
+				//guarda ficheiro e guarda caminho na hash
+				const char* backupPath = save_path_in_hash(processId, path);
+				int fd_out = open(backupPath, O_WRONLY);
+				//copy_file_range(fd, NULL, fd_out, NULL, filesize, 0);
+				// aumenta o numero de ocurrencias
+				g_hash_table_insert(ocurrencies, &processId, &(*ocurrencie++));
+			}else{
+				//mata o processo
+				kill(processId, SIGKILL);
+				//recupera os ficheiros
+
+				//remove das hashs
+			}
+		}else{
+			//ad nao existe na hash
+			int n = 1;
+			g_hash_table_insert(ocurrencies, &processId, &n);
+			//guarda ficheiro e guarda caMINHO na hash
+		}
+
 		res = pwrite(fd, buf, size, offset);
 	}else{
 		res = -1;
@@ -563,5 +630,7 @@ static struct fuse_operations xmp_oper = {
 int main(int argc, char *argv[])
 {
 	umask(0);
+	ocurrencies = g_hash_table_new( g_int_hash,  g_int_equal);
+	paths = g_hash_table_new( g_int_hash,  g_int_equal);
 	return fuse_main(argc, argv, &xmp_oper, NULL);
 }
