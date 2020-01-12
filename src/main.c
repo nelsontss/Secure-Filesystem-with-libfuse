@@ -343,52 +343,150 @@ static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
 	return res;
 }
 
+char * mystrdup (const char *s) {
+    if(s == NULL) return NULL;          
+    char *d = malloc (strlen (s) + 1); 
+    if (d == NULL) return NULL;       
+    strcpy (d,s);                    
+    return d;                       
+}
+
+const char* get_filename(const char* path){
+	const char* res;
+	int i = 0;
+	printf("Caminho: %s\n", path);
+	while (path[i]!='\0'){
+		if(path[i++]=='/'){
+			res = path+i;
+		}
+	}
+	printf("Passou 3 %s \n", res);
+	return res;
+}
+
 const char* save_path_in_hash(pid_t pid, const char* path){
 	GArray* res;
-	char* dir = BACKUP_DIR;
-	printf("Caminho: %s\n", path);
-	const char* backupPath = strcat(dir, path); // definir
+	char* finalPath = mystrdup(BACKUP_DIR);
+	char* initialPath = mystrdup(path); 
+	strcat(finalPath, get_filename(initialPath));
+	printf("%s\n", finalPath);
 	if((res = g_hash_table_lookup(paths, &pid))){
 		GArray* tuple = g_array_new(false, false, 2);
-		g_array_insert_val(tuple, 0, path);
-		g_array_insert_val(tuple, 1, backupPath);
+		g_array_insert_val(tuple, 0, initialPath);
+		g_array_insert_val(tuple, 1, finalPath);
 		g_array_append_val(res, tuple);
 	}else{
 		res = g_array_new (false, false, 10);
 		GArray* tuple = g_array_new(false, false, 2);
-		g_array_insert_val(tuple, 0, path);
-		g_array_insert_val(tuple, 1, backupPath);
+		g_array_insert_val(tuple, 0, initialPath);
+		g_array_insert_val(tuple, 1, finalPath);
 		g_array_append_val(res, tuple);
 		g_hash_table_insert(paths, &pid, res);
 	}
 
-	return backupPath;
+	printf("%s\n", finalPath);
+	return finalPath;
 }
+
+
+
+void removeFromHash(pid_t pid){
+	g_hash_table_remove(paths, &pid);
+	g_hash_table_remove(ocurrencies, &pid);
+}
+
+
+int cp(const char *to, const char *from)
+{
+	printf("%s -> %s\n", to, from);
+    int fd_to, fd_from;
+    char buf[4096];
+    ssize_t nread;
+    int saved_errno;
+
+    fd_from = open(from, O_RDONLY);
+    if (fd_from < 0)
+        return -1;
+
+    fd_to = open(to, O_WRONLY | O_CREAT , 0666);
+    if (fd_to < 0)
+        goto out_error;
+
+    while (nread = read(fd_from, buf, sizeof buf), nread > 0)
+    {
+        char *out_ptr = buf;
+        ssize_t nwritten;
+
+        do {
+            nwritten = write(fd_to, out_ptr, nread);
+
+            if (nwritten >= 0)
+            {
+                nread -= nwritten;
+                out_ptr += nwritten;
+            }
+            else if (errno != EINTR)
+            {
+                goto out_error;
+            }
+        } while (nread > 0);
+    }
+
+    if (nread == 0)
+    {
+        if (close(fd_to) < 0)
+        {
+            fd_to = -1;
+            goto out_error;
+        }
+        close(fd_from);
+
+        /* Success! */
+        return 0;
+    }
+
+  out_error:
+    saved_errno = errno;
+
+    close(fd_from);
+    if (fd_to >= 0)
+        close(fd_to);
+
+    errno = saved_errno;
+    return -1;
+}
+
+void recoverFiles(pid_t pid){
+	GArray* pths = g_hash_table_lookup(paths, &pid);
+	int n = 0;
+	GArray* i = g_array_index(pths, GArray*, n);
+	while(i!=NULL){	
+
+		cp(g_array_index(i, char*, 1), g_array_index(i, char*, 0));
+		i++;
+	}
+
+}
+
 
 static int xmp_write(const char *path, const char *buf, size_t size,
 		     off_t offset, struct fuse_file_info *fi)
 {
 	int fd;
 	int res;
-	int filesize;
-
 	(void) fi;
+
 	if(fi == NULL)
-		fd = open(path, O_WRONLY);
+		fd = open(path, O_RDWR);
 	else
 		fd = fi->fh;
 	
 	if (fd == -1)
 		return -errno;
 	
-	printf("Caminho: %s\n", path);
-	
-	filesize = lseek(fd, 0, SEEK_END)+1;
-	lseek(fd, 0, SEEK_SET);
-	
 	double final_entropy = calculate_entropy(buf, size);
 	printf("Final entropy: %f\n", final_entropy);
-	if (final_entropy < 6.0) {
+	if (final_entropy > 5.8) {
 		struct fuse_context* context = fuse_get_context();
 		pid_t processId = context->pid;
 
@@ -398,27 +496,34 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 			if(*ocurrencie<10){
 				//guarda ficheiro e guarda caminho na hash
 				const char* backupPath = save_path_in_hash(processId, path);
-				int fd_out = open(backupPath, O_WRONLY);
-				//copy_file_range(fd, NULL, fd_out, NULL, filesize, 0);
+				int tam = cp(path,backupPath);
+				printf("Copiou %d -- %s\n", tam, strerror(errno));
 				// aumenta o numero de ocurrencias
 				g_hash_table_insert(ocurrencies, &processId, &(*ocurrencie++));
+				res = pwrite(fd, buf, size, offset);
 			}else{
 				//mata o processo
 				kill(processId, SIGKILL);
 				//recupera os ficheiros
-
+				recoverFiles(processId);
 				//remove das hashs
+				removeFromHash(processId);
+				res = -1;
 			}
 		}else{
 			//ad nao existe na hash
 			int n = 1;
 			g_hash_table_insert(ocurrencies, &processId, &n);
 			//guarda ficheiro e guarda caMINHO na hash
+			const char* backupPath = save_path_in_hash(processId, path);
+			int tam = cp(path,backupPath);
+			printf("Copiou %d -- %s\n", tam, strerror(errno));
+			res = pwrite(fd, buf, size, offset);
 		}
 
-		res = pwrite(fd, buf, size, offset);
+		
 	}else{
-		res = -1;
+		res = pwrite(fd, buf, size, offset);
 	}
 	
 	return res;
