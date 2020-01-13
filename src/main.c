@@ -354,23 +354,20 @@ char * mystrdup (const char *s) {
 const char* get_filename(const char* path){
 	const char* res;
 	int i = 0;
-	printf("Caminho: %s\n", path);
 	while (path[i]!='\0'){
 		if(path[i++]=='/'){
 			res = path+i;
 		}
 	}
-	printf("Passou 3 %s \n", res);
 	return res;
 }
 
-const char* save_path_in_hash(pid_t pid, const char* path){
+const char* save_path_in_hash(char* pid, const char* path){
 	GArray* res;
 	char* finalPath = mystrdup(BACKUP_DIR);
 	char* initialPath = mystrdup(path); 
 	strcat(finalPath, get_filename(initialPath));
-	printf("%s\n", finalPath);
-	if((res = g_hash_table_lookup(paths, &pid))){
+	if((res = g_hash_table_lookup(paths, pid))){
 		GArray* tuple = g_array_new(false, false, 2);
 		g_array_insert_val(tuple, 0, initialPath);
 		g_array_insert_val(tuple, 1, finalPath);
@@ -381,80 +378,21 @@ const char* save_path_in_hash(pid_t pid, const char* path){
 		g_array_insert_val(tuple, 0, initialPath);
 		g_array_insert_val(tuple, 1, finalPath);
 		g_array_append_val(res, tuple);
-		g_hash_table_insert(paths, &pid, res);
+		g_hash_table_insert(paths, pid, res);
 	}
 
-	printf("%s\n", finalPath);
 	return finalPath;
 }
 
 
 
-void removeFromHash(pid_t pid){
-	g_hash_table_remove(paths, &pid);
-	g_hash_table_remove(ocurrencies, &pid);
+void removeFromHash(char* pid){
+	g_hash_table_remove(paths, pid);
+	g_hash_table_remove(ocurrencies, pid);
 }
 
 
-int cp(const char *to, const char *from)
-{
-	printf("%s -> %s\n", to, from);
-    int fd_to, fd_from;
-    char buf[4096];
-    ssize_t nread;
-    int saved_errno;
 
-    fd_from = open(from, O_RDONLY);
-    if (fd_from < 0)
-        return -1;
-
-    fd_to = open(to, O_WRONLY | O_CREAT , 0666);
-    if (fd_to < 0)
-        goto out_error;
-
-    while (nread = read(fd_from, buf, sizeof buf), nread > 0)
-    {
-        char *out_ptr = buf;
-        ssize_t nwritten;
-
-        do {
-            nwritten = write(fd_to, out_ptr, nread);
-
-            if (nwritten >= 0)
-            {
-                nread -= nwritten;
-                out_ptr += nwritten;
-            }
-            else if (errno != EINTR)
-            {
-                goto out_error;
-            }
-        } while (nread > 0);
-    }
-
-    if (nread == 0)
-    {
-        if (close(fd_to) < 0)
-        {
-            fd_to = -1;
-            goto out_error;
-        }
-        close(fd_from);
-
-        /* Success! */
-        return 0;
-    }
-
-  out_error:
-    saved_errno = errno;
-
-    close(fd_from);
-    if (fd_to >= 0)
-        close(fd_to);
-
-    errno = saved_errno;
-    return -1;
-}
 
 void recoverFiles(pid_t pid){
 	GArray* pths = g_hash_table_lookup(paths, &pid);
@@ -462,16 +400,39 @@ void recoverFiles(pid_t pid){
 	GArray* i = g_array_index(pths, GArray*, n);
 	while(i!=NULL){	
 
-		cp(g_array_index(i, char*, 1), g_array_index(i, char*, 0));
+		//,cp(g_array_index(i, char*, 1), g_array_index(i, char*, 0));
 		i++;
 	}
 
 }
 
 
+int file_Copy (const char* FileSource, const char* FileDestination)
+{
+    int   c;
+    FILE *stream_R;
+    FILE *stream_W; 
+
+    stream_R = fopen (FileSource, "r");
+    if (stream_R == NULL)
+        return -1;
+    stream_W = fopen (FileDestination, "w");   //create and write to file
+    if (stream_W == NULL)
+     {
+        fclose (stream_R);
+        return -2;
+     }    
+    while ((c = fgetc(stream_R)) != EOF)
+        fputc (c, stream_W);
+    fclose (stream_R);
+    fclose (stream_W);
+
+    return 0;
+}
+
 static int xmp_write(const char *path, const char *buf, size_t size,
 		     off_t offset, struct fuse_file_info *fi)
-{
+{	
 	int fd;
 	int res;
 	(void) fi;
@@ -486,39 +447,47 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 	
 	double final_entropy = calculate_entropy(buf, size);
 	printf("Final entropy: %f\n", final_entropy);
+	char* ocurrencie;
 	if (final_entropy > 5.8) {
 		struct fuse_context* context = fuse_get_context();
-		pid_t processId = context->pid;
+		char processId[12];
+		sprintf(processId, "%d", context->pid);
 
 		//processo já existe na hash
-		int* ocurrencie;
-		if((ocurrencie = g_hash_table_lookup(ocurrencies, &processId))){
-			if(*ocurrencie<10){
+		if((ocurrencie = g_hash_table_lookup(ocurrencies, processId))){
+			int i_ocurrencie = atoi(ocurrencie);
+			if(i_ocurrencie<10){
+				printf("ocurrencie: %s\n", ocurrencie);
 				//guarda ficheiro e guarda caminho na hash
-				const char* backupPath = save_path_in_hash(processId, path);
-				int tam = cp(path,backupPath);
-				printf("Copiou %d -- %s\n", tam, strerror(errno));
+				const char* backupPath = save_path_in_hash(mystrdup(processId), path);
+				int x = file_Copy(path, backupPath);
+				printf("Copiou %d de %s para %s\n Erro: %s\n", x, path, backupPath, strerror(errno));
 				// aumenta o numero de ocurrencias
-				g_hash_table_insert(ocurrencies, &processId, &(*ocurrencie++));
+				sprintf(ocurrencie, "%d", i_ocurrencie+1);
+				g_hash_table_insert(ocurrencies, mystrdup(processId), mystrdup(ocurrencie));
+				printf("Inseriu na hash\n");
 				res = pwrite(fd, buf, size, offset);
+				
 			}else{
+				printf("ocurrencie: %s\n", ocurrencie);
 				//mata o processo
-				kill(processId, SIGKILL);
+				kill(atoi(processId), SIGKILL);
 				//recupera os ficheiros
-				recoverFiles(processId);
+				//recoverFiles(processId);
 				//remove das hashs
 				removeFromHash(processId);
 				res = -1;
 			}
 		}else{
 			//ad nao existe na hash
-			int n = 1;
-			g_hash_table_insert(ocurrencies, &processId, &n);
+			ocurrencie = "1";
+			g_hash_table_insert(ocurrencies, mystrdup(processId), mystrdup(ocurrencie));
 			//guarda ficheiro e guarda caMINHO na hash
-			const char* backupPath = save_path_in_hash(processId, path);
-			int tam = cp(path,backupPath);
-			printf("Copiou %d -- %s\n", tam, strerror(errno));
+			const char* backupPath = save_path_in_hash(mystrdup(processId), path);
+			int x = file_Copy(path, backupPath);
+			printf("Copiou %d de %s para %s\n Erro: %s\n", x, path, backupPath, strerror(errno));
 			res = pwrite(fd, buf, size, offset);
+			
 		}
 
 		
@@ -526,6 +495,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 		res = pwrite(fd, buf, size, offset);
 	}
 	
+	close(fd);
 	return res;
 }
 
@@ -735,7 +705,7 @@ static struct fuse_operations xmp_oper = {
 int main(int argc, char *argv[])
 {
 	umask(0);
-	ocurrencies = g_hash_table_new( g_int_hash,  g_int_equal);
-	paths = g_hash_table_new( g_int_hash,  g_int_equal);
+	ocurrencies = g_hash_table_new( g_str_hash,  g_str_equal);
+	paths = g_hash_table_new( g_str_hash,  g_str_equal);
 	return fuse_main(argc, argv, &xmp_oper, NULL);
 }
