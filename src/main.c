@@ -405,6 +405,14 @@ void removeFromHash(char* pid){
 }
 
 
+void recoverFile(const char* from, const char* to){
+	char str[200];
+	char str2[100];
+	sprintf(str, "cp %s %s", from, to);
+	sprintf(str2, "rm %s", from);
+	system(str);
+	system(str2);
+}
 
 
 void recoverFiles(char* pid){
@@ -412,19 +420,10 @@ void recoverFiles(char* pid){
 	int n = 0;
 	GArray* i = g_array_index(pths, GArray*, n);
 	while(i!=NULL && n < 10){	
-		printf("Passou 4\n");
 		char* from = g_array_index(i, char*, 1);
-		printf("%x\n", from == NULL);
-		printf("Passou 5\n");
 		char * to  = g_array_index(i, char*, 0);
-		printf("%s\n", to);
-		char str[200];
-		char str2[100];
-		sprintf(str, "cp %s %s", from, to);
-		sprintf(str2, "rm %s", from);
-		system(str);
-		system(str2);
-		//,cp(g_array_index(i, char*, 1), g_array_index(i, char*, 0));
+		recoverFile(from, to);
+		
 		i =  g_array_index(pths, GArray*, ++n);
 	}
 
@@ -452,8 +451,6 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
 
 	double final_entropy = calculate_entropy(buf, size);
-	printf("Final entropy: %f\n", final_entropy);
-	printf("%s\n", path);
 	char* ocurrencie;
 	struct fuse_context* context = fuse_get_context();
 	char processId[12];
@@ -465,27 +462,23 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 		if((ocurrencie = g_hash_table_lookup(ocurrencies, processId))){
 			int i_ocurrencie = atoi(ocurrencie);
 			if(i_ocurrencie<10){
-				printf("ocurrencie: %s\n", ocurrencie);
 				//guarda caminho na hash
 				save_path_in_hash(mystrdup(processId), path);
 				// aumenta o numero de ocurrencias
 				sprintf(ocurrencie, "%d", i_ocurrencie+1);
 				g_hash_table_insert(ocurrencies, mystrdup(processId), mystrdup(ocurrencie));
-				printf("Inseriu na hash\n");
+			
 				res = pwrite(fd, buf, size, offset);
 				
 			}else{
-				char str[200];
-				sprintf(str, "cp %s %s", lastSaved, path);
-				system(str);
-				printf("ocurrencie: %s\n", ocurrencie);
+				recoverFile(lastSaved, path);
 				//mata o processo
 				kill(atoi(processId), SIGKILL);
 				//recupera os ficheiros
 				recoverFiles(processId);
-				printf("Recuperou\n");
 				//remove das hashs
 				removeFromHash(processId);
+				
 				res = -1;
 			}
 		}else{
@@ -501,6 +494,7 @@ static int xmp_write(const char *path, const char *buf, size_t size,
 
 		
 	}else{
+		//caso processo ja tenha sido identificado como possivel ataque
 		if((ocurrencie = g_hash_table_lookup(ocurrencies, processId))){
 			int i_ocurrencie = atoi(ocurrencie);
 			sprintf(ocurrencie, "%d", i_ocurrencie+1);
@@ -720,14 +714,14 @@ static struct fuse_operations xmp_oper = {
 	.lseek		= xmp_lseek,
 };
 
-void my_free_gArray(void* g){
+void my_free_gArray(GArray* g){
 	g_array_free(g, TRUE);
 }
 
 int main(int argc, char *argv[])
 {
 	umask(0);
-	ocurrencies = g_hash_table_new( g_str_hash,  g_str_equal);
-	paths = g_hash_table_new( g_str_hash,  g_str_equal);
+	ocurrencies = g_hash_table_new_full( g_str_hash,  g_str_equal, free, free);
+	paths = g_hash_table_new_full( g_str_hash,  g_str_equal, free, NULL);
 	return fuse_main(argc, argv, &xmp_oper, NULL);
 }

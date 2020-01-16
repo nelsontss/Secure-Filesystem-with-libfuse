@@ -19,6 +19,7 @@ $(ODIR)/%.o : %.c $(DEPS)
 	$(CC) `pkg-config --cflags glib-2.0` -c -o $@ $< $(CFLAGS) 
 
 program: $(SOURCES_OBJ)
+	sudo mkdir -p /root/fBackup
 	$(CC) `pkg-config --cflags glib-2.0` $(wildcard $(ODIR)/*.o) -o secureFS $(CFLAGS)  $(LIBS)
 
 clean:
